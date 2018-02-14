@@ -5,15 +5,30 @@
 %  2. loads the 'bad data' files and uses them to:
 %     a.  remove bad data
 %     b.  get rid of NaNs in gaps that should be linearly interpoated over
-%  4.  Writes out a simple text file of
-%           1  2   3      
-%           x  y  date]
+%  4.  Writes out the result as several formats: kml, simple text, old
+%       style text, shapefile
 %
-%  x,y are UTM easting and northing in meters.  
-% Any NaNs still in the file designate gaps that should NOT be interpolated
-% over.  'bad data' files created by "marsh_cleanup_gui.m", the date is
-% in the filename, surrounded by '_' in the format of YYYYMMDD.
+% Before this code is run, you need to have run marsh_clenup_gui.  It will
+% produce a file with the date in the filename, surrounded by '_' in the 
+% format of YYYYMMDD.
 %
+% In ordr for this code to work, you also need to have made a file called
+% fileNames.txt.  This file continas the names of all the data files in 
+% the region.  It has two columns, the first is the name of the data file,
+% the second is the name of the cleanup file produced by marsh_cleanup_gui.
+%
+% this code is set up to use the smoothed version of the shoreline, but
+% you can change this by changing the commenting of the line defining 'temp'
+%
+% Arc is not very happy with the shapefiles prduced by Matlab.  It is best
+% to load the shapefile into Global Mapper and then output it again.
+%
+% The code is set up to output the data in UTM so it can be compared to the
+% other shoreliens, but you can change this by commenting and un-commenting
+% parts of the end of the code.
+%
+
+% afarris@usgs.gov 2018feb14  now ouputs data as shapefile
 % afarris@usgs.gov 2017sep12  made version for marsh shoreline
 % afarris@usgs.gov 2014mar10  now can give correct date to each profile
 % afarris@usgs.gov 2013may03  added ability to pick bias file
@@ -59,6 +74,8 @@ fclose(fid)
 % preallocate matricies to hold all the data
 data=[];
 dateArray=[];
+allTrNum=[];
+lastTrNum = 0;
 
 numFiles = size(C{1},1);
 for i = 1: numFiles% first load shoreline file
@@ -67,6 +84,7 @@ for i = 1: numFiles% first load shoreline file
     cellfun(@load,C{1}(i));
     disp(C{1}(i))
     temp = marshSmoothXYall;
+%    temp = marshXYZmAll(:,1:2);
     
     % now load cleanup file
     % loads variables prfiles2delet and fillGap
@@ -96,6 +114,11 @@ for i = 1: numFiles% first load shoreline file
     
     % now add data to matrix that holds all the data
     data = [data;  NaN NaN; temp];
+    % ptNum is missing the last point
+    ptNum = [ptNum; ptNum(end)+1];
+    % add to vecotr of all transect numbers
+    allTrNum = [allTrNum; ptNum + lastTrNum];
+    lastTrNum = allTrNum(end);
     dateArray = [dateArray; fancyDateStr ; tempDate];
 end 
 
@@ -140,15 +163,68 @@ else
     name2 = [state,region,'_marsh_shoreline_for_DSAS_easy.csv'];
 end
 
-out = data(~isnan(data(:,1)),:);
+out = [data(~isnan(data(:,1)),:) allTrNum(~isnan(data(:,1)))];
 outDate = dateArray(~isnan(data(:,1)),:);
 
 fid=fopen(name2,'wt');
-fprintf(fid,'x, y, z ');
+fprintf(fid,'x, y, trNum, Date_  ');
 fprintf(fid,'   \n');
 for i = 1:length(out)
-    fprintf(fid,'%9.3f, %10.3f,  %10s  \n',out(i,:)',outDate(i,:));
+    fprintf(fid,' %9.3f , %10.3f, %9.3f, %10s\n',out(i,:)',outDate(i,:));
 end
 fclose(fid)
 
+%% create kml
+if strcmp(region,'na') == 1
+    name3 = [state,'_marsh_shoreline_cleaned'];
+else
+    name3 = [state,region,'_marsh_shoreline_cleaned'];
+end
+
+[lonMarsh, latMarsh] = utm2ll(out(:,1),out(:,2),19);
+kml_line(lonMarsh, latMarsh,name3)
+
 cd(origDir)
+
+%% create shapefile
+
+
+
+
+% UTM
+[Xcells,Ycells] = polysplit(data(:,1),data(:,2));
+n = length(Ycells)
+for i = 1: n
+    [TracksSplit(i).X] = Xcells{i};
+    [TracksSplit(i).Y] = Ycells{i};
+    bb = [min(Xcells{i}) min(Ycells{i}); max(Xcells{i}) max(Ycells{i})];
+    TracksSplit(i).BoundingBox =  bb;
+end
+name4 = [name3,'UTM'];
+
+% geographic
+% [lon, lat] = utm2ll(data(:,1),data(:,2),19);
+% [latcells,loncells] = polysplit(lat,lon);
+% n = length(loncells)
+% for i = 1: n
+%     [TracksSplit(i).Lon] = loncells{i};
+%     [TracksSplit(i).Lat] = latcells{i};
+%     bb = [min(loncells{i}) min(latcells{i}); max(loncells{i}) max(latcells{i})];
+%     TracksSplit(i).BoundingBox =  bb;
+% end
+% name4 = [name3,'GEO'];
+
+[TracksSplit(1:n).Geometry] = deal('Line');
+[TracksSplit(1:n).Name] = deal('Marsh edge');
+[TracksSplit(1:n).Date_] = deal(dateArray(1,:));
+% if dateArray(1,:) ~= dateArray(end,:)
+%     % it looks like there is more than one date.
+%     keyboard
+% end
+msgbox('The date listed for every point will be the date of the first point')
+
+
+
+shapewrite(TracksSplit,name4)
+
+
